@@ -1,3 +1,5 @@
-.venv
-__pycache__/
+.venv/
+.env
 backups/
+__pycache__/
+tester.py
