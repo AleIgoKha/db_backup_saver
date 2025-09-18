@@ -3,3 +3,5 @@
 backups/
 __pycache__/
 tester.py
+client_secrets.json
+credentials.json
