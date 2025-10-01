@@ -1,8 +1,9 @@
 import subprocess
 import os
+import json
 from dotenv import load_dotenv
 from pathlib import Path
-from datetime import date
+from datetime import date, datetime, timedelta
 
 
 from pydrive2.auth import GoogleAuth
@@ -19,6 +20,8 @@ DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 OUTPUT_DIR = os.getenv("OUTPUT_DIR")
 GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
+CREDENTIALS_JSON = os.getenv("CREDENTIALS_JSON")
+
 
 Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
@@ -48,18 +51,30 @@ def dump_postgres():
     return today
 
 
-# функция для загрузки дампа базы данных в папку на google disk
-def upload_to_drive(file_path):
+# аутентификация с google disc
+def authenticate_drive():
     gauth = GoogleAuth()
+    
+    # если переменная определена, то записываем ее данные в файл
+    # если не определена, то 
+    if CREDENTIALS_JSON:
+        with open("credentials.json", "w") as f:
+            f.write(CREDENTIALS_JSON)
+    
     gauth.LoadCredentialsFile("credentials.json")
+    
     if gauth.credentials is None:
         gauth.LocalWebserverAuth()
     elif gauth.access_token_expired:
         gauth.Refresh()
+        
     gauth.SaveCredentialsFile("credentials.json")
     
-    drive = GoogleDrive(gauth)
-    
+    return GoogleDrive(gauth)
+
+
+# функция для загрузки дампа базы данных в папку на google disk
+def upload_to_drive(drive, file_path):
     file_drive = drive.CreateFile({'title': file_path.name,
                                    'parents': [{'id': GOOGLE_DRIVE_FOLDER_ID}] })
     file_drive.SetContentFile(str(file_path))
@@ -69,12 +84,36 @@ def upload_to_drive(file_path):
     print(f"Uploaded {file_path} to Google Drive with file ID {file_drive['id']}")
 
 
+# функция для удаление дампов старше 7 дней
+def cleanup_old_backups(drive, folder_id, keep_days=7):
+    cutoff_date = datetime.now() - timedelta(days=keep_days)
+    
+    # List all files in the folder
+    query = f"'{folder_id}' in parents and trashed=false"
+    file_list = drive.ListFile({'q': query}).GetList()
+    
+    for file_drive in file_list:
+        # Try to parse the date from the filename: backup_YYYY-MM-DD.dump
+        try:
+            file_date_str = file_drive['title'].split('_')[1].split('.')[0]
+            file_date = datetime.fromisoformat(file_date_str)
+        except Exception:
+            print(f"Skipping file with unrecognized name: {file_drive['title']}")
+            continue
+        
+        # удаляем если файл старше 7 дней
+        if file_date < cutoff_date:
+            file_drive.Delete()
+            print(f"Deleted old backup: {file_drive['title']}")
+
     
 if __name__ == "__main__":
     dump_file = dump_postgres()
     
     try:
-        upload_to_drive(dump_file)
+        drive = authenticate_drive()
+        upload_to_drive(drive, dump_file)
+        cleanup_old_backups(drive, GOOGLE_DRIVE_FOLDER_ID, keep_days=7)
     except Exception as e:
         print(f"Upload failed: {e}")
     finally:
